@@ -1,6 +1,9 @@
 package api.profiles;
 
-import api.SC;
+import java.util.Timer;
+import java.util.TimerTask;
+import java.util.concurrent.atomic.AtomicInteger;
+
 import api.Time;
 import api.profiles.captain.Captain;
 import api.profiles.viewer.Viewer;
@@ -14,6 +17,8 @@ public class Profile {
 	
 	private RequestHelper rh;
 	
+	private AtomicInteger time = new AtomicInteger(30);
+	private Timer timer = new Timer();
 	
 	public Profile(String cookies, String userAgent, String gameDataVersion, String clientVersion) {
 		rh = new RequestHelper(cookies, userAgent, gameDataVersion, clientVersion);
@@ -23,28 +28,18 @@ public class Profile {
 		} catch (InterruptedException e2) {
 			//	TODO logging
 			e2.printStackTrace();
-		}
-		
-		if(rh.isCaptain()) {
-			type = ProfileType.CAPTAIN;
-			captain = new Captain();
-		} else {
-			type = ProfileType.VIEWER;
-			viewer = new Viewer();
+			throw new RuntimeException(e2);
 		}
 		
 		Time.updateSecsOff(rh.getCurrentTime(false, null, null).get("date").getAsString());
 		
-		//	TODO logging
-		//	TODO handle data
-		rh.getUserUnits(true, raw -> {}, e -> e.printStackTrace());
-		rh.getUserSouls(true, raw -> {}, e -> e.printStackTrace());
-		rh.getCurrentStoreItems(true, raw -> {}, e -> e.printStackTrace());
-		rh.getUserEventProgression(true, raw -> {}, e -> e.printStackTrace());
-		rh.getActiveAmbassadors(true, raw -> {}, e -> e.printStackTrace());
-		rh.grantEventQuestMilestoneReward(true, raw -> {}, e -> e.printStackTrace());
-		rh.getUserQuests(true, raw -> {}, e -> e.printStackTrace());
-		rh.getUserItems(true, raw -> {}, e -> e.printStackTrace());
+		if(rh.isCaptain()) {
+			type = ProfileType.CAPTAIN;
+			captain = new Captain(this);
+		} else {
+			type = ProfileType.VIEWER;
+			viewer = new Viewer(this);
+		}
 		
 		try {
 			rh.waitForFinish();
@@ -53,17 +48,28 @@ public class Profile {
 			e1.printStackTrace();
 		}
 		
-		rh.getActiveRaidsByUser(SC.zeroLengthIntArr, true, raw -> {}, e -> e.printStackTrace());
-		rh.getAvailableCurrencies(true, raw -> {}, e -> e.printStackTrace());
+		timer.schedule(new TimerTask() {
+			@Override
+			public void run() {
+				int t = time.decrementAndGet();
+				if(t == 0) {
+					switch (type) {
+					case CAPTAIN:
+						captain.update();
+						break;
+					case VIEWER:
+						viewer.update();
+						break;
+					}
+					time.set(30);
+				}
+			}
+		}, 1000);
 		
-		try {
-			rh.waitForFinish();
-		} catch (InterruptedException e1) {
-			//	TODO logging
-			e1.printStackTrace();
-		}
-		
-		
+	}
+	
+	public RequestHelper getRequestHelper() {
+		return rh;
 	}
 	
 	

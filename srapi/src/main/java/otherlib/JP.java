@@ -31,6 +31,10 @@ public class JP {
 	public static JsonArray parseArr(String json) {
 		return normal.fromJson(json, JsonArray.class);
 	}
+	
+	public static JsonElement parse(String json) {
+		return normal.fromJson(json, JsonElement.class);
+	}
 
 	/**
 	 * <b>slow!</b><br>

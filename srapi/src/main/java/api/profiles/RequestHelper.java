@@ -23,13 +23,43 @@ import com.google.gson.JsonObject;
 
 import api.SC;
 import api.Time;
+import api.skins.Skins;
+import api.souls.Soul;
+import api.units.UnitType;
 import otherlib.JP;
+import otherlib.Logger;
 import otherlib.Options;
 
 public class RequestHelper {
 
 	{
 		System.setProperty("jdk.httpclient.allowRestrictedHeaders", "Connection,Host");
+	}
+	
+	private static boolean isUpdatingSRData = false;
+	
+	private boolean isUpdatingDataPath() {
+		return isUpdatingSRData;
+	}
+	
+	private static String currentSRDataPath = "";
+
+	public static String getCurrentSRDataPath() {
+		return currentSRDataPath;
+	}
+	
+	public static synchronized void updateSRData(String dataPath, JsonObject data) {
+		if(dataPath.equals(currentSRDataPath))
+			return;
+		isUpdatingSRData = true;
+		currentSRDataPath = dataPath;
+		
+		UnitType.genUnitTypesFromData(data);
+		Skins.genSkinsFromData(data);
+		
+		//	TODO update everything
+		
+		isUpdatingSRData = false;
 	}
 
 	private final AtomicInteger tcounter = new AtomicInteger(0);
@@ -143,15 +173,15 @@ public class RequestHelper {
 
 		try {
 			// another thread may do a update
-			while (Options.isUpdatingDataPath()) {
+			while (isUpdatingDataPath()) {
 				Thread.sleep(100);
 			}
 
 			CompletableFuture<HttpResponse<String>> raw = client.sendAsync(getPost(cn, params),
 					BodyHandlers.ofString());
 
+			tcounter.getAndIncrement();
 			if (async) {
-				tcounter.getAndIncrement();
 				raw.whenComplete((resp, t) -> {
 					if (t != null) {
 						onError.accept(t);
@@ -159,23 +189,9 @@ public class RequestHelper {
 					}
 
 					try {
-						String out = resp.body();
-						// TODO logging
-						JsonObject obj = JP.parseObj(out);
-
-						CheckReturnValue val = checkRawResponse(obj);
-						switch (val) {
-						case OK:
-							onData.accept(obj);
-							return;
-						case RESEND:
-							if (depth >= MAX_RESEND_COUNT)
-								throw new Exception("Exceeded max_resend_count");
-							send(depth + 1, cn, true, onData, onError, params);
-							return;
-						default:
-							throw new IllegalArgumentException("unsupported return value from check: " + val);
-						}
+						JsonObject out = check(resp.body(), depth, cn, true, onData, onError, params);
+						if (out != null)
+							onData.accept(out);
 					} catch (Exception e) {
 						onError.accept(e);
 					}
@@ -184,25 +200,36 @@ public class RequestHelper {
 				return null;
 			}
 
-			String out = raw.get().body();
-			// TODO logging
-			JsonObject obj = JP.parseObj(out);
-
-			CheckReturnValue val = checkRawResponse(obj);
-			switch (val) {
-			case OK:
-				return obj;
-			case RESEND:
-				if (depth >= MAX_RESEND_COUNT)
-					throw new Exception("Exceeded max_resend_count");
-				return send(depth + 1, cn, false, onData, onError, params);
-			default:
-				throw new IllegalArgumentException("unsupported return value from check: " + val);
-			}
+			JsonObject ret = check(raw.get().body(), depth, cn, false, onData, onError, params);
+			tcounter.getAndDecrement();
+			return ret;
 		} catch (Exception e) {
 			// TODO do better
 			throw new RuntimeException("sth went wrong", e);
 		}
+	}
+
+	
+
+	private JsonObject check(String body, final int depth, String cn, boolean async, Consumer<JsonObject> onData,
+			Consumer<Throwable> onError, String... params) throws Exception {
+
+		Logger.print(body, Logger.srapi, Logger.info);
+
+		JsonObject obj = JP.parseObj(body);
+
+		CheckReturnValue val = checkRawResponse(obj);
+		switch (val) {
+		case OK:
+			return obj;
+		case RESEND:
+			if (depth >= MAX_RESEND_COUNT)
+				throw new Exception("Exceeded max_resend_count");
+			return send(depth + 1, cn, async, onData, onError, params);
+		default:
+			throw new IllegalArgumentException("unsupported return value from check: " + val);
+		}
+
 	}
 
 	/**
@@ -224,7 +251,7 @@ public class RequestHelper {
 		case "Game data mismatch.":
 		case "Client lower.":
 			String url = jo.getAsJsonObject("info").get("dataPath").getAsString();
-			Options.update(url, JP.parseObj(getData(url)).getAsJsonObject("sheets"));
+			updateSRData(url, JP.parseObj(getSRData(url)).getAsJsonObject("sheets"));
 			reload();
 			return CheckReturnValue.RESEND;
 		}
@@ -234,65 +261,6 @@ public class RequestHelper {
 	private static enum CheckReturnValue {
 		OK, RESEND;
 	}
-
-	/**
-	 * prepares and sends a request with the given parameters<br>
-	 * if async this method will not block execution, get the data/error with the
-	 * consumers
-	 * 
-	 * @param cn
-	 * @param async
-	 * @param onData  only used for async, data is ready
-	 * @param onError only used for async, error occured
-	 * @param params
-	 * @return the data, or null if async
-	 */
-	/*
-	 * private JsonObject send(String cn, boolean async, Consumer<JsonObject>
-	 * onData, Consumer<Exception> onError, String... params) { if (async) {
-	 * tcounter.getAndIncrement(); new Thread(() -> { try { JsonObject raw =
-	 * prepareAndSend(cn, params); if (onData != null) onData.accept(raw); } catch
-	 * (Exception e) { if (onError != null) onError.accept(e); }
-	 * tcounter.getAndDecrement(); }).start(); return null; }
-	 * 
-	 * return prepareAndSend(cn, params); }
-	 */
-
-	/**
-	 * prepares and sends a request with the given parameters
-	 * 
-	 * @param cn
-	 * @param params
-	 * @return the resulting data
-	 */
-	/*
-	 * private JsonObject prepareAndSend(String cn, String... params) { if
-	 * (params.length % 2 != 0) throw new
-	 * IllegalArgumentException("parameters always come in pairs!");
-	 * 
-	 * JsonObject raw = actuallySend(params, cn); if (checkRawResponse(raw)) raw =
-	 * actuallySend(params, cn);
-	 * 
-	 * return raw; }
-	 */
-
-	/**
-	 * creates and sends a request with the given parameters
-	 * 
-	 * @param params
-	 * @param cn
-	 * @return
-	 */
-	/*
-	 * private JsonObject actuallySend(String[] params, String cn) { while
-	 * (isUpdatingDataPath) { try { Thread.sleep(100); } catch (InterruptedException
-	 * e) { e.printStackTrace(); } }
-	 * 
-	 * try { String out = client.sendAsync(getPost(cn, params),
-	 * BodyHandlers.ofString()).get().body(); // TODO logging return
-	 * JP.parseObj(out); } catch (InterruptedException | ExecutionException e) { //
-	 * TODO do better throw new RuntimeException("sth went wrong", e); } }
-	 */
 
 	/**
 	 * creates a get request for a specific url with all headers set
@@ -340,7 +308,7 @@ public class RequestHelper {
 		}
 	}
 
-	private String getData(String dataPath) {
+	private String getSRData(String dataPath) {
 		try {
 			return client.sendAsync(getGet(dataPath), BodyHandlers.ofString()).get().body();
 		} catch (InterruptedException | ExecutionException e) {
@@ -435,6 +403,14 @@ public class RequestHelper {
 
 	public JsonObject getCurrentTime(boolean async, Consumer<JsonObject> onData, Consumer<Throwable> onError) {
 		return send("getCurrentTime", async, onData, onError);
+	}
+
+	public JsonObject getFactionInfo(boolean async, Consumer<JsonObject> onData, Consumer<Throwable> onError) {
+		return send("getFactionInfo", async, onData, onError);
+	}
+	
+	public JsonObject getLiveAndPlayingCaptainCount(boolean async, Consumer<JsonObject> onData, Consumer<Throwable> onError) {
+		return send("getLiveAndPlayingCaptainCount", async, onData, onError);
 	}
 
 	public JsonObject unlockUnit(String unitType, boolean async, Consumer<JsonObject> onData,

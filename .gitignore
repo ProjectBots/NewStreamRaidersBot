@@ -1,1 +1,7 @@
 .project
+srapi/target/
+bot/target/
+TestServer/target/
+data/temp/
+data/config.json
+data/cache.dat
